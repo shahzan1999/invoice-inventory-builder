@@ -1,21 +1,24 @@
 package com.invoicebuilder.InvoiceReader.azure;
 
-import com.invoicebuilder.InvoiceReader.dto.InvoiceResponseObject;
+import com.invoicebuilder.InvoiceReader.dto.response.InvoiceItems;
 import com.invoicebuilder.InvoiceReader.dto.response.UploadInvoiceResponseDTO;
 import lombok.extern.slf4j.Slf4j;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.json.GsonJsonParser;
 import org.springframework.core.io.ByteArrayResource;
-import org.springframework.http.*;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 
 @Slf4j
 @Service
@@ -31,98 +34,101 @@ public class InvoiceAIUtility {
     @Autowired
     RestTemplate restTemplate;
 
-    public String uploadInvoiceImage(MultipartFile invoice) throws IOException {
+    public UploadInvoiceResponseDTO uploadInvoiceImage(MultipartFile invoice) throws IOException {
 
-//        RestTemplate restTemplate = new RestTemplate();
-//        String url = azureUploadURI;
-//        log.info("Calling azure on uri "+url);
-//        HttpHeaders httpHeaders = new HttpHeaders();
-//        httpHeaders.set("Content-Type","image/jpeg");
-//        httpHeaders.set("Ocp-Apim-Subscription-Key",azureSubscriptionToken);
-//
-//
-//        ByteArrayResource fileAsResource = new ByteArrayResource(invoice.getBytes()){
-//            @Override
-//            public String getFilename(){
-//                return invoice.getOriginalFilename();
-//            }
-//        };
-//
-//        HttpEntity<Object> httpEntity = new HttpEntity<>(fileAsResource,httpHeaders);
-//
-//        ResponseEntity<String> responseEntity = restTemplate.postForEntity(url,httpEntity,String.class);
-//        log.info(responseEntity.toString());
-//
-//        try {
-//            Thread.sleep(5000);
-//        } catch (InterruptedException e) {
-//            throw new RuntimeException(e);
-//        }
-//
-//        log.info(responseEntity.getHeaders().get("Operation-Location").get(0));
 
-        String fetchInvoiceItemURI = "https://invoice-inventory-builder.cognitiveservices.azure.com/formrecognizer/documentModels/prebuilt-invoice/analyzeResults/139473e5-fdd3-4dcb-91db-d5b55bba2624?api-version=2023-07-31";
-//                responseEntity.getHeaders().get("Operation-Location").get(0);
+        String url = azureUploadURI;
+
+        HttpHeaders httpHeaders = new HttpHeaders();
+        httpHeaders.set("Content-Type","image/jpeg");
+        httpHeaders.set("Ocp-Apim-Subscription-Key",azureSubscriptionToken);
+
+
+        ByteArrayResource fileAsResource = new ByteArrayResource(invoice.getBytes()){
+            @Override
+            public String getFilename(){
+                return invoice.getOriginalFilename();
+            }
+        };
+
+        HttpEntity<Object> httpEntity = new HttpEntity<>(fileAsResource,httpHeaders);
+
+        ResponseEntity<String> responseEntity = restTemplate.postForEntity(url,httpEntity,String.class);
+
+        log.info("Invoice Upload Api Response Received: "+ responseEntity.getStatusCode());
+
+        try {
+            Thread.sleep(5000);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+
+
+        String fetchInvoiceItemURI = responseEntity.getHeaders().get("Operation-Location").get(0);
+//                "https://invoice-inventory-builder.cognitiveservices.azure.com/formrecognizer/documentModels/prebuilt-invoice/analyzeResults/139473e5-fdd3-4dcb-91db-d5b55bba2624?api-version=2023-07-31";
+
 
         HttpHeaders getResultHttpHeaders = new HttpHeaders();
         getResultHttpHeaders.set("Ocp-Apim-Subscription-Key",azureSubscriptionToken);
 
         HttpEntity<Object> getResulthttpEntity = new HttpEntity<>(getResultHttpHeaders);
 
-        try {
 
-            ResponseEntity<String> invoiceResponseObjectResponseEntity1
-                    = restTemplate.exchange(fetchInvoiceItemURI, HttpMethod.GET,getResulthttpEntity,String.class);
+        ResponseEntity<String> invoiceResponseObjectResponseEntity
+                = restTemplate.exchange(fetchInvoiceItemURI, HttpMethod.GET,getResulthttpEntity,String.class);
 
-            JSONObject response = new JSONObject(invoiceResponseObjectResponseEntity1.getBody());
-            JSONArray itemValueArrays =  response.getJSONObject("analyzeResult")
-                        .getJSONArray("documents").getJSONObject(0)
-                            .getJSONObject("fields")
-                                .getJSONObject("Items")
-                    .getJSONArray("valueArray");
+        log.info("Read Invoice API Response Received: "+ invoiceResponseObjectResponseEntity.getStatusCode());
 
-            for (int i = 0; i < itemValueArrays.length(); i++) {
+
+        JSONObject response = new JSONObject(invoiceResponseObjectResponseEntity.getBody());
+        JSONArray itemValueArrays =  response.getJSONObject("analyzeResult")
+                    .getJSONArray("documents").getJSONObject(0)
+                        .getJSONObject("fields")
+                            .getJSONObject("Items")
+                .getJSONArray("valueArray");
+
+        int errorEntry = 0;
+        List<InvoiceItems> invoiceItemsList = new ArrayList<>();
+        for (int i = 0; i < itemValueArrays.length(); i++) {
+
+            InvoiceItems invoiceItem = new InvoiceItems();
+
+            try {
+
                 JSONObject valueObject = itemValueArrays.getJSONObject(i)
                         .getJSONObject("valueObject");
 
                 JSONObject amountJson = valueObject.getJSONObject("Amount").optJSONObject("valueCurrency");
-                log.info("Amount: "+amountJson.getDouble("amount"));
+                invoiceItem.setTotalAmount(amountJson.getDouble("amount"));
 
                 JSONObject itemDescJson = valueObject.getJSONObject("Description");
-                log.info("Desc: "+itemDescJson.getString("content").replace("\n", " ").replace("\r", " "));
+                invoiceItem.setItemName(itemDescJson.getString("content").replace("\n", " ").replace("\r", " "));
 
                 JSONObject qtyJson = valueObject.getJSONObject("Quantity");
-                log.info("Qty: "+qtyJson.getDouble("valueNumber"));
+                invoiceItem.setQuantity(qtyJson.getDouble("valueNumber"));
 
                 JSONObject unitPriceJson = valueObject.getJSONObject("UnitPrice").optJSONObject("valueCurrency");
-                log.info("Unit Price: "+unitPriceJson.getDouble("amount"));
+                invoiceItem.setUnitPrice(unitPriceJson.getDouble("amount"));
 
-
+                invoiceItemsList.add(invoiceItem);
+            } catch (Exception e){
+                errorEntry++;
+                log.info( e.getMessage() );
             }
 
-            log.info(invoiceResponseObjectResponseEntity1.toString());
-
-        } catch (Exception e){
-            e.printStackTrace();
         }
 
-//        ResponseEntity<InvoiceResponseObject> invoiceResponseObjectResponseEntity
-//                = restTemplate.exchange(fetchInvoiceItemURI, HttpMethod.GET,getResulthttpEntity,InvoiceResponseObject.class);
-//
-//        log.info("Resp "+invoiceResponseObjectResponseEntity.toString());
+        UploadInvoiceResponseDTO uploadInvoiceResponseDTO = new UploadInvoiceResponseDTO();
+        uploadInvoiceResponseDTO.setTotalItems(itemValueArrays.length());
+        uploadInvoiceResponseDTO.setErrorItems(errorEntry);
+        uploadInvoiceResponseDTO.setItems(invoiceItemsList);
 
-        return null;
+
+
+        return uploadInvoiceResponseDTO;
 
     }
 
 
-    private static UploadInvoiceResponseDTO parseAPIResponse(String response){
-
-
-        GsonJsonParser gsonJsonParser = new GsonJsonParser();
-        Map<String, Object> responseMap =  gsonJsonParser.parseMap(response);
-        log.info(responseMap.toString());
-        return null;
-    }
 
 }
